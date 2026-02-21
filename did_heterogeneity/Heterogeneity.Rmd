@@ -1,0 +1,122 @@
+---
+title: "Heterogeneous Treatment Effects in a Difference-in-Differences Framework"
+author: "Adél Luca Szűcs"
+date: ""
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+1. Objective
+
+This note illustrates the estimation of heterogeneous treatment effects within a fixed-effects difference-in-differences (DiD) framework using panel data from a field experiment.
+
+The objective is to evaluate whether treatment effects vary systematically with pre-treatment characteristics.
+
+2. Data and Setup
+
+```{r, warning=FALSE, message=FALSE}
+library(foreign)
+library(fixest)
+library(dplyr)
+library(interflex)
+library(car)
+
+theUrl <- "https://surfdrive.surf.nl/files/index.php/s/5jmKNy3xXzzppgG/download"
+waste <- read.dta(theUrl)
+```
+
+The dataset contains weekly observations for garbage collection routes, with treatment assigned at the route level. The outcome variable is residual_weight, and the treatment variable is treatment_dummy.
+
+3. Subgroup-Specific Treatment Effects
+
+To allow for treatment heterogeneity, we define an indicator based on the median pre-treatment share of terraced houses.
+
+
+
+```{r}
+waste <- waste %>%
+  mutate(high_terracedhouses = as.numeric(
+    terracedhouses > median(terracedhouses, na.rm = TRUE)
+  ))
+
+waste$low_terracedhouses <- 1 - waste$high_terracedhouses
+```
+
+
+We estimate a fully interacted DiD model with route and week fixed effects:
+
+
+
+```{r}
+cate_binary <- feols(
+  residual_weight ~
+    treatment_dummy:low_terracedhouses +
+    treatment_dummy:high_terracedhouses +
+    treatment_period:high_terracedhouses
+  | route + week,
+  data = waste,
+  vcov = ~route
+)
+
+summary(cate_binary)
+```
+The interaction terms provide subgroup-specific conditional average treatment effects (CATEs).
+
+To test whether these subgroup effects differ statistically:
+
+```{r}
+linearHypothesis(
+  cate_binary,
+  "treatment_dummy:low_terracedhouses = treatment_dummy:high_terracedhouses"
+)
+
+```
+4. Continuous Interaction Specification
+
+Next, we allow treatment effects to vary continuously with the pre-treatment share of terraced houses.
+```{r}
+cate_continuous <- feols(
+  residual_weight ~
+    treatment_dummy +
+    treatment_dummy:terracedhouses +
+    treatment_period:terracedhouses
+  | route + week,
+  data = waste,
+  vcov = ~route
+)
+
+summary(cate_continuous)
+```
+The marginal treatment effect evaluated at the mean of the moderator is:
+
+```{r}
+b0 <- coef(cate_continuous)["treatment_dummy"]
+b1 <- coef(cate_continuous)["treatment_dummy:terracedhouses"]
+
+mean_th <- mean(waste$terracedhouses, na.rm = TRUE)
+cate_at_mean <- b0 + b1 * mean_th
+
+cate_at_mean
+```
+5. Marginal Effect Visualization
+
+To explore potential non-linearities, we estimate marginal effects using a binning approach:
+
+```{r}
+out <- interflex(
+  Y = "residual_weight",
+  D = "treatment_dummy",
+  X = "terracedhouses",
+  FE = c("route", "week"),
+  data = waste,
+  estimator = "binning",
+  cutoffs = c(76, 77.5),
+  na.rm = TRUE
+)
+
+plot(out)
+```
+
